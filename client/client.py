@@ -5,10 +5,10 @@ import math
 server_name = 'localhost' 
 server_port = 12000
 
-file_name = "gloglo.png"
-# file_name = input("Me diga o nome do arquivo: ")
+file_name = input("Me diga o nome do arquivo: ")
 buffer_size = 1024
 
+# Cria socket UDP
 client_socket = socket(AF_INET, SOCK_DGRAM)
 
 # Le o arquivo
@@ -16,7 +16,7 @@ file = open(file_name, 'rb')
 file_bytes = file.read()
 file.close()
 
-# Envia arquivo (nome, pacotes, mensagem final)
+# Envia arquivo (nome -> pacotes -> mensagem final)
 print('Enviando', len(file_bytes), 'bytes em', math.ceil(len(file_bytes)/buffer_size), 'pacotes')
 client_socket.sendto(file_name.encode(), (server_name, server_port)) 
 for i in range(0, len(file_bytes), buffer_size):
