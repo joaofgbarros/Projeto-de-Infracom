@@ -1,10 +1,12 @@
 from socket import *
+from random import random
 
 class rdt_sender:
     acks = [b'ACK0', b'ACK1']
     pkts = [b'PKT0', b'PKT1']
     buffer_size = 1024
-
+    lost_pkt_probability = 0.2
+    
     def __init__(self, socket: socket):
         self.socket = socket
         self.seqnum = 0
@@ -34,5 +36,8 @@ class rdt_sender:
 
 
     def udt_send(self, data, dest):
-        # falta adicionar o random :-)
-        self.socket.sendto(data, dest)
+        # nao falta adicionar o random :-) ;)
+        if random() <= lost_pkt_probability
+            print("Simulando a perda do pacote...")
+        else:
+            self.socket.sendto(data, dest)
