@@ -1,13 +1,12 @@
 from socket import *
-from rdtreceptor import rdtrecebedor
-from rdt import rdt_sender
+from rdt import *
 
 sock = socket(AF_INET, SOCK_DGRAM)
 sock.bind(('localhost', 12000))
 print("O servidor está pronto para receber!")
 
 while True:
-    recebedor = rdtrecebedor(sock)
+    recebedor = rdt.rdt_receiver(sock)
     dados, cliente_addr = recebedor.receive_bytes()
     print("Conexão estabelecida!")
 
@@ -25,9 +24,10 @@ while True:
     print("Enviando arquivo de volta para o cliente!")
     arq_bytes = open(nome_processado, 'rb').read()
 
-    enviador = rdt_sender(sock)
+    enviador = rdt.rdt_sender(sock)
     resposta = nome_processado.encode() + b'\r\n' + arq_bytes
     enviador.send_bytes(resposta, cliente_addr)
 
 
     print("Enviado!")
+
