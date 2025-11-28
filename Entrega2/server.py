@@ -1,7 +1,6 @@
 from socket import *
 from rdtreceptor import rdtrecebedor
 from rdt import rdt_sender
-import os
 
 sock = socket(AF_INET, SOCK_DGRAM)
 sock.bind(('localhost', 12000))
@@ -29,5 +28,6 @@ while True:
     enviador = rdt_sender(sock)
     resposta = nome_processado.encode() + b'\r\n' + arq_bytes
     enviador.send_bytes(resposta, cliente_addr)
+
 
     print("Enviado!")
