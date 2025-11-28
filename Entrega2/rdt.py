@@ -11,7 +11,7 @@ class rdt_sender:
     
     def send_bytes(self, data, dest):
         # Envia os chunks
-        self.socket.settimeout(0.5)
+        self.socket.settimeout(0.1)
         for i in range(0, len(data), type(self).buffer_size-4):
             # Chunk dos dados + número de sequência
             msg = type(self).pkts[self.seqnum] + data[i:i+type(self).buffer_size-4]
