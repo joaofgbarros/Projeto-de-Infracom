@@ -8,4 +8,5 @@ Na segunda entrega do projeto da disciplina de Infra-estrutura de Comunicação,
 - João Victor Grangeiro Costa
 
 ### Como executar
-* Espere mais informações :-).
+* 1 - Rodar o código para o servidor primeiro.
+* 2 - 
