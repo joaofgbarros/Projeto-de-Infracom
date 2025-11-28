@@ -1,5 +1,4 @@
-from rdt import rdt_sender
-from rdtreceptor import rdtrecebedor
+from rdt import *
 from socket import *
 
 server_ip = 'localhost'
@@ -7,8 +6,8 @@ server_port = 12000
 server_addr = (server_ip, server_port)
 
 sock = socket(AF_INET, SOCK_DGRAM)
-enviador = rdt_sender(sock)
-recebedor = rdtrecebedor(sock)
+enviador = rdt.rdt_sender(sock)
+recebedor = rdt.rdt_receiver(sock)
 
 file_name = 'gloglo.png'
 file = b''
