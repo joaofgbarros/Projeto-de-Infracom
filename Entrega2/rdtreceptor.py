@@ -16,7 +16,8 @@ class rdtrecebedor:
     def __init__(self, socket: socket):
         self.socket = socket
         self.numesperado = 0
-    
+        self.ultimo_addr = None
+
     def receive_bytes(self):
         data_recebida = b''
 
@@ -25,6 +26,7 @@ class rdtrecebedor:
         while True:
             pkts, addr = self.socket.recvfrom(1024)
             seqnum, data = extrai_pacote(pkts)
+            self.ultimo_addr = addr #salvando endereco
 
             if seqnum == -1:
                 print("Recebi um pacote com erro! B(")
@@ -46,6 +48,7 @@ class rdtrecebedor:
                     try:
                         while True:
                             pkts, addr = self.socket.recvfrom(1024)
+                            self.ultimo_addr = addr
                             seqnum, data = extrai_pacote(pkts)
 
                             if seqnum != -1:
@@ -55,7 +58,7 @@ class rdtrecebedor:
                                 print("Eu recebi. Eu recebi algo. B')")
 
                     except:
-                        print("Eu nao recebi. Acabou a transmissao.")
+                        print("Eu nao recebi nada... A transmissao de dados acabou!")
                         break
             else:
                 #pacote fora de ordem
@@ -65,4 +68,4 @@ class rdtrecebedor:
                 print("Recebi um pacote fora de ordem! Reenviando ACK")
         
         self.socket.settimeout(None)
-        return data_recebida
+        return data_recebida, self.ultimo_addr
