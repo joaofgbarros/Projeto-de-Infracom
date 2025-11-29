@@ -5,7 +5,7 @@ class rdt:
     acks = [b'ACK0', b'ACK1']
     pkts = [b'PKT0', b'PKT1']
     buffer_size = 1024
-    lost_pkt_probability = 0.2
+    lost_pkt_probability = 0.1
 
     def __init__(self, socket: socket):
         self.socket = socket
@@ -58,6 +58,7 @@ class rdt_receiver(rdt):
         super().__init__(socket)
         self.numesperado = 0
         self.ultimo_addr = None
+        self.timeout_final = 0.5
 
     def extrai_pacote(pctdata):
         cabeca = pctdata[:4]
@@ -89,15 +90,15 @@ class rdt_receiver(rdt):
 
                 # envia ack
                 ack_pkts = type(self).acks[seqnum]
-                print("Enviando ACK!")
-                type(self).udt_send(ack_pkts, addr)
+                print("> Enviando ACK!")
+                self.udt_send(ack_pkts, addr)
                 self.numesperado = 1 - self.numesperado
                 if len(data) == 0:
                     # Pacote sem corpo: é o último.
-                    print("Isso quer dizer que acabou ne? :(")
-                    print("Mas vai que tem mais coisa ne! :)")
+                    print("> Isso quer dizer que acabou ne? :(")
+                    print("> Mas vai que tem mais coisa ne! :)")
                     # Tenta receber mais um pacote (cajo o ack se perca)
-                    self.socket.settimeout(0.5)
+                    self.socket.settimeout(self.timeout_final)
                     try:
                         while True:
                             # Tenta receber
@@ -108,16 +109,16 @@ class rdt_receiver(rdt):
                             if seqnum != -1:
                                 #recebeu algo!!! e sem erro!
                                 ack_pkts = type(self).acks[seqnum]
-                                type(self).udt_send(ack_pkts, addr)
+                                self.udt_send(ack_pkts, addr)
                                 print("Eu recebi. Eu recebi algo. B')")
                     except:
                         # Deu timeout, então acabou
-                        print("Eu nao recebi nada... A transmissao de dados acabou!")
+                        print("> Eu nao recebi nada... A transmissao de dados acabou!")
                         break
             else:
                 # pacote fora de ordem, so envia ack
                 ack_pkts = type(self).acks[seqnum]
-                type(self).udt_send(ack_pkts, addr)
-                print("Recebi um pacote fora de ordem! Reenviando ACK")
+                self.udt_send(ack_pkts, addr)
+                print("> Recebi um pacote fora de ordem! Reenviando ACK")
         
         return data_recebida, self.ultimo_addr
