@@ -19,6 +19,7 @@ pos = {}               # nome → (x,y) ; posicao do usuario no grid
 usou_hint = {}         # nome → ja usou sim ou nao (so pode 1)
 usou_suggest = {}      # nome → booleano tb
 tesouro = None         # (x, y) ; posicao do tesouro
+ociosos = {}           # nome -> addr ; usado para saber se o servidor está a espera de um ACK de um usuário especifico
 
 # funcoes pro jogo
 
@@ -27,6 +28,7 @@ def envia(addr, msg):
     
 def broadcast(msg):
     for _, addr in usuarios.items():
+      if _, addr not in ociosos.items(): 
         envia(addr, msg)    
     
 def sorteia_tesouro():
@@ -53,6 +55,8 @@ def estado():
 while True:
     
     data, addr = recebedor.recv()
+    if (_, addr in ociosos.items()):
+        del ociosos[usuarios[addr]]
     cmd = data.decode().strip().split()
 
     #recebendo comandos
@@ -76,7 +80,8 @@ while True:
         if tesouro is None:
             sorteia_tesouro()
 
-        envia(addr, "voce este online!")
+        envia(addr, "voce esta online!")
+        ociosos[nome] = addr
         continue
 
     # precisa ta logado p continuar
@@ -112,6 +117,7 @@ while True:
         # checa se nao vai sair
         if not (1 <= x <= 3 and 1 <= y <= 3):
             envia(addr, "cuidado, voce vai sair do mapa!")
+            ociosos[nome] = addr
             continue
 
         pos[nome] = (x,y)
@@ -119,6 +125,12 @@ while True:
         # se achou o tesouro, avisa todos: “ O jogador <nome:porta> encontrou o tesouro na posição (x,y)!”
         if (x,y) == tesouro:
             broadcast(f"O jogador {nome} encontrou o tesouro na posição {tesouro}!")
+            for nome, (x,y) in pos.items():
+                pos[nome] = (1,1)
+            for nome, _ in usou_hint:
+                del usou_hint[nome]
+            for nome, _ in usou_suggest:
+                del usou_suggest[nome]
             sorteia_tesouro()
 
         broadcast(estado()) # fim da rodada, mostra estado
@@ -132,12 +144,37 @@ while True:
     # dessa forma, os dois recursos so devolvem a mesma direcao se ela for a unica que precisa ser tomada (reto) ate o tesouro.
     
     # hint dica, printa ex: “O tesouro está mais acima.”
-    #if cmd[0] == "hint":
+    """
+    if cmd[0] == "hint":
+        if usou_hint[nome]:
+            envia(addr, "voce ja usou hint!")
+            ociosos[nome] = addr
+            continue
+
+        usou_hint[nome] = True #hint usada
+        px, py = pos[nome]
+        tx, ty = tesouro
+
+        if (ty-py) > 0 and abs((ty-py)) >= abs((tx-px)):
+            envia(addr, "O tesouro está mais acima")
+            ociosos[nome] = addr
+        elif (tx-px) > 0 and abs((tx-px)) >= abs((ty-py)):
+            envia(addr, "O tesouro está mais a direita")
+            ociosos[nome] = addr
+        elif (tx-px) < 0 and abs((tx-px)) >= abs((ty-py)):
+            envia(addr, "O tesouro está mais a esquerda")
+            ociosos[nome] = addr
+        else (ty-py) < 0 and abs((tx-px)) >= abs((ty-py)):
+            envia(addr, "O tesouro está mais abaixo")
+            ociosos[nome] = addr
+        continue
+    """
     
     # sugestao, printa ex: “Sugestão: move up.”
     if cmd[0] == "suggest":
         if usou_suggest[nome]:
-            envia(addr, "voce ja usou suggest! que tal pedir uma hint?")
+            envia(addr, "voce ja usou suggest!")
+            ociosos[nome] = addr
             continue
 
         usou_suggest[nome] = True #agora ja usou
@@ -147,13 +184,15 @@ while True:
 
         if ty > py:
             envia(addr, "Sugestão: move up.")
+            ociosos[nome] = addr
         elif ty < py:
             envia(addr, "Sugestão: move down.")
+            ociosos[nome] = addr
         elif tx > px:
             envia(addr, "Sugestão: move right.")
+            ociosos[nome] = addr
         else:
             envia(addr, "Sugestão: move left.")
+            ociosos[nome] = addr
         continue
-    
-
     
