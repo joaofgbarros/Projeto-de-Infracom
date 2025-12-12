@@ -17,6 +17,11 @@ while True:
     # envia comando p servidor (login, hint, etc)
     enviador.send(cmd.encode(), server_addr)
 
-    # recebe resposta
-    resposta, _ = recebedor.recv()
-    print(resposta.decode())
+    # Recebe respostas até servidor pedir input
+    while True:
+        try:
+            resposta, _ = recebedor.recv()
+            if resposta == b"INPUT": break  
+            print(resposta.decode())
+        except TimeoutError:
+            resposta = b""
