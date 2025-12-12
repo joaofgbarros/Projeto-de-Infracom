@@ -29,7 +29,8 @@ def broadcast(msg):
     for _, addr in usuarios.items():
         envia(addr, msg)    
     
-def cade_tesouro():
+def sorteia_tesouro():
+    global tesouro
     #grid 3x3
     while True:
         x = random.randint(1, 3)
@@ -37,8 +38,9 @@ def cade_tesouro():
 
         # nao pode comecar junto com os jogadores em 1,1
         if (x, y) != (1, 1):
-            return (x, y)    
-    
+            tesouro = (x, y)
+            return
+
 def estado():
     s = "[Servidor] Estado atual: " # msg q envia a cada rodada
     partes = []
@@ -153,4 +155,5 @@ while True:
             envia(addr, "Sugestão: move left.")
         continue
     
+
     
