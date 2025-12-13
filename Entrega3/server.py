@@ -13,13 +13,19 @@ enviador = rdt_sender(sock)
 
 # estado atual do jogo
 
-usuarios = {}          # nome → addr ; usuarios online, pra saber a porta endereco
-enderecos = {}         # addr → nome ; contrario: pega porta e sabe usuario q mandou
-pos = {}               # nome → (x,y) ; posicao do usuario no grid
-usou_hint = {}         # nome → ja usou sim ou nao (so pode 1)
-usou_suggest = {}      # nome → booleano tb
-tesouro = None         # (x, y) ; posicao do tesouro
-ociosos = {}           # nome -> addr ; usado para saber se o servidor está a espera de um ACK de um usuário especifico
+usuarios = {}               # nome → addr ; usuarios online, pra saber a porta endereco
+enderecos = {}              # addr → nome ; contrario: pega porta e sabe usuario q mandou
+pos = {}                    # nome → (x,y) ; posicao do usuario no grid
+usou_hint = {}              # nome → ja usou sim ou nao (so pode 1)
+usou_suggest = {}           # nome → booleano tb
+tesouro = None              # (x, y) ; posicao do tesouro
+ociosos = {}                # nome -> addr ; usado para saber se o servidor está a espera de um ACK de um usuário especifico
+
+# controle das rodadas
+
+rodada_ativa = False        # flag pra indicar se tem uma rodada rodando
+tempo_rodada = 10           # 10 segundos por rodada
+jogadores_jogando = set()   # jogadores que enviaram movimento nessa rodada
 
 # funcoes pro jogo
 
@@ -28,7 +34,6 @@ def envia(addr, msg):
     
 def broadcast(msg):
     for _, addr in usuarios.items():
-      if _, addr not in ociosos.items(): 
         envia(addr, msg)    
     
 def sorteia_tesouro():
@@ -50,15 +55,29 @@ def estado():
         partes.append(f"{nome}({x},{y})")
     return s + ", ".join(partes)
 
-###
+def elimina(nome, motivo): #me de motivo pra ir embora
+    if nome in usuarios:
+        addr = usuarios[nome]
+        envia(addr, f"Voce foi {motivo} B(") #avisando o perdedor
+        #removendo o perdedor
+        if nome in usuarios:
+            del usuarios[nome]
+        if addr in enderecos:
+            del enderecos[addr]
+        if nome in pos:
+            del pos[nome]
+        if nome in usou_hint:
+            del usou_hint[nome]
+        if nome in usou_suggest:
+            del usou_suggest[nome]
 
-while True:
-    
-    data, addr = recebedor.recv()
-    if (_, addr in ociosos.items()):
-        del ociosos[usuarios[addr]]
+        #termina de humilhar completamente o cara avisando os outros
+        broadcast(f"{nome} foi {motivo} XD")
+        return True
+    return False
+
+def comanda(data, addr):
     cmd = data.decode().strip().split()
-
     #recebendo comandos
 
     # login
@@ -67,7 +86,7 @@ while True:
 
         if nome in usuarios:
             envia(addr, "alguem ja usou esse nome! seja mais original") # nao pode nome repetido
-            continue
+            return
         
         usuarios[nome] = addr
         enderecos[addr] = nome
@@ -81,118 +100,184 @@ while True:
             sorteia_tesouro()
 
         envia(addr, "voce esta online!")
-        ociosos[nome] = addr
-        continue
+        #ociosos[nome] = addr
+        return
 
     # precisa ta logado p continuar
     if addr not in enderecos:
         envia(addr, "voce precisa fazer login primeiro")
-        continue
+        return
 
     nome = enderecos[addr]
 
     # logout
     if cmd[0] == "logout": # remove o usuario
-        del usuarios[nome]
-        del enderecos[addr]
-        del pos[nome]
+        elimina(nome, "desconectado") #uma eliminacao voluntaria
         envia(addr, "voce deslogou")
-        continue
-
-    # move (incrementa as coordenadas. tem que impedir de "sair" do grid  
-    if cmd[0] == "move":
-        direcao = cmd[1]
-
-        x, y = pos[nome]
-
-        if direcao == "up":
-            y += 1
-        elif direcao == "down":
-            y -= 1
-        elif direcao == "left":
-            x -= 1
-        elif direcao == "right":
-            x += 1
-
-        # checa se nao vai sair
-        if not (1 <= x <= 3 and 1 <= y <= 3):
-            envia(addr, "cuidado, voce vai sair do mapa!")
-            ociosos[nome] = addr
-            continue
-
-        pos[nome] = (x,y)
-
-        # se achou o tesouro, avisa todos: “ O jogador <nome:porta> encontrou o tesouro na posição (x,y)!”
-        if (x,y) == tesouro:
-            broadcast(f"O jogador {nome} encontrou o tesouro na posição {tesouro}!")
-            for nome, (x,y) in pos.items():
-                pos[nome] = (1,1)
-            for nome, _ in usou_hint:
-                del usou_hint[nome]
-            for nome, _ in usou_suggest:
-                del usou_suggest[nome]
-            sorteia_tesouro()
-
-        broadcast(estado()) # fim da rodada, mostra estado
-        continue
-
-
-    # para os recursos especiais, ja que a funcao dos dois eh a mesma de informar uma direcao do tesouro,
-    # ambos comparam as coordenadas do usuario aas do tesouro, mas possuem prioridade diferente sobre qual direcao dizer
-    # por exemplo, se o jogador esta em (1,1) e o tesouro em(2,2), a hint vera logo que X(tesouro) > X(user) e 
-    # dira pro jogador ir para direita. ja o suggest vera primeiro que Y(tesouro) > Y(user), e sugere  UP.
-    # dessa forma, os dois recursos so devolvem a mesma direcao se ela for a unica que precisa ser tomada (reto) ate o tesouro.
+        return
     
-    # hint dica, printa ex: “O tesouro está mais acima.”
-    """
-    if cmd[0] == "hint":
-        if usou_hint[nome]:
-            envia(addr, "voce ja usou hint!")
-            ociosos[nome] = addr
-            continue
+    if rodada_ativa:
+        if cmd[0] in ["move", "hint", "suggest"]:
+            jogadores_jogando.add(nome)
 
-        usou_hint[nome] = True #hint usada
-        px, py = pos[nome]
-        tx, ty = tesouro
+        # move (incrementa as coordenadas. tem que impedir de "sair" do grid  
+        if cmd[0] == "move":
+            direcao = cmd[1]
 
-        if (ty-py) > 0 and abs((ty-py)) >= abs((tx-px)):
-            envia(addr, "O tesouro está mais acima")
-            ociosos[nome] = addr
-        elif (tx-px) > 0 and abs((tx-px)) >= abs((ty-py)):
-            envia(addr, "O tesouro está mais a direita")
-            ociosos[nome] = addr
-        elif (tx-px) < 0 and abs((tx-px)) >= abs((ty-py)):
-            envia(addr, "O tesouro está mais a esquerda")
-            ociosos[nome] = addr
-        else (ty-py) < 0 and abs((tx-px)) >= abs((ty-py)):
-            envia(addr, "O tesouro está mais abaixo")
-            ociosos[nome] = addr
-        continue
-    """
+            x, y = pos[nome]
+
+            if direcao == "up":
+                y += 1
+            elif direcao == "down":
+                y -= 1
+            elif direcao == "left":
+                x -= 1
+            elif direcao == "right":
+                x += 1
+
+            # checa se nao vai sair
+            if not (1 <= x <= 3 and 1 <= y <= 3):
+                envia(addr, "cuidado, voce vai sair do mapa!")
+                #ociosos[nome] = addr
+                return
+
+            pos[nome] = (x,y)
+
+            # se achou o tesouro, avisa todos: “ O jogador <nome:porta> encontrou o tesouro na posição (x,y)!”
+            if (x,y) == tesouro:
+                broadcast(f"O jogador {nome} encontrou o tesouro na posição {tesouro}!")
+                for nome, (x,y) in pos.items():
+                    pos[nome] = (1,1)
+                for nome, _ in usou_hint:
+                    del usou_hint[nome]
+                for nome, _ in usou_suggest:
+                    del usou_suggest[nome]
+                sorteia_tesouro()
+                return "achooou" #força o fim da rodada
+            
+            return
+
+
+        # para os recursos especiais, ja que a funcao dos dois eh a mesma de informar uma direcao do tesouro,
+        # ambos comparam as coordenadas do usuario aas do tesouro, mas possuem prioridade diferente sobre qual direcao dizer
+        # por exemplo, se o jogador esta em (1,1) e o tesouro em(2,2), a hint vera logo que X(tesouro) > X(user) e 
+        # dira pro jogador ir para direita. ja o suggest vera primeiro que Y(tesouro) > Y(user), e sugere  UP.
+        # dessa forma, os dois recursos so devolvem a mesma direcao se ela for a unica que precisa ser tomada (reto) ate o tesouro.
+        
+        # hint dica, printa ex: “O tesouro está mais acima.”
+
+        if cmd[0] == "hint":
+            if usou_hint[nome]:
+                envia(addr, "voce ja usou hint!")
+                #ociosos[nome] = addr
+                return
+
+            usou_hint[nome] = True #hint usada
+            px, py = pos[nome]
+            tx, ty = tesouro
+
+            if (ty-py) > 0 and abs((ty-py)) >= abs((tx-px)):
+                envia(addr, "O tesouro está mais acima")
+                #ociosos[nome] = addr
+            elif (tx-px) > 0 and abs((tx-px)) >= abs((ty-py)):
+                envia(addr, "O tesouro está mais a direita")
+                #ociosos[nome] = addr
+            elif (tx-px) < 0 and abs((tx-px)) >= abs((ty-py)):
+                envia(addr, "O tesouro está mais a esquerda")
+                #ociosos[nome] = addr
+            else:
+                envia(addr, "O tesouro está mais abaixo")
+                #ociosos[nome] = addr
+            return
+        
+        # sugestao, printa ex: “Sugestão: move up.”
+        if cmd[0] == "suggest":
+            if usou_suggest[nome]:
+                envia(addr, "voce ja usou suggest!")
+                #ociosos[nome] = addr
+                return
+
+            usou_suggest[nome] = True #agora ja usou
+
+            px, py = pos[nome]
+            tx, ty = tesouro
+
+            if ty > py:
+                envia(addr, "Sugestão: move up.")
+                #ociosos[nome] = addr
+            elif ty < py:
+                envia(addr, "Sugestão: move down.")
+                #ociosos[nome] = addr
+            elif tx > px:
+                envia(addr, "Sugestão: move right.")
+                #ociosos[nome] = addr
+            else:
+                envia(addr, "Sugestão: move left.")
+                #ociosos[nome] = addr
+            return
+    #nao ta tendo rodada e o cara ta querendo jogar, ô bixin ansioso
+    envia(addr, "Espera comecar a rodada primeiro, danado")
     
-    # sugestao, printa ex: “Sugestão: move up.”
-    if cmd[0] == "suggest":
-        if usou_suggest[nome]:
-            envia(addr, "voce ja usou suggest!")
-            ociosos[nome] = addr
-            continue
+def roda_rodada():
+    global rodada_ativa, tesouro
 
-        usou_suggest[nome] = True #agora ja usou
+    print("\natencao Creuzebek, vai comecar a baixaria")
+    rodada_ativa = True
+    jogadores_jogando.clear()
 
-        px, py = pos[nome]
-        tx, ty = tesouro
+    if tesouro is None:
+        sorteia_tesouro()
 
-        if ty > py:
-            envia(addr, "Sugestão: move up.")
-            ociosos[nome] = addr
-        elif ty < py:
-            envia(addr, "Sugestão: move down.")
-            ociosos[nome] = addr
-        elif tx > px:
-            envia(addr, "Sugestão: move right.")
-            ociosos[nome] = addr
-        else:
-            envia(addr, "Sugestão: move left.")
-            ociosos[nome] = addr
-        continue
+    broadcast(f"Rodada iniciada! Voce tem {tempo_rodada} segundos para enviar seu movimento.") #em um tom claro de ameaça
+    broadcast("input") #sinal pros clientes enviarem os seus comandos
+
+    inicio = time.time()
+    achou = False
+
+    while time.time() - inicio < tempo_rodada and not achou: #timeout de 10s pra receber os comandos
+        try:
+            data, addr = recebedor.recv(0.1)
+            if data:
+                resultado = comanda(data, addr)
+                if resultado == "achooou":
+                    achou = True
+                    break
+        except timeout:
+            pass
+    #acabou a rodada
+    rodada_ativa = False
+
+    if achou:
+        broadcast("OBA!!! Encontraram o tesouro!")
+        return
+
+    eliminados = []
+    for nome in list(usuarios.keys()):
+        if nome not in jogadores_jogando:
+            eliminados.append(nome)
     
+    #eliminando os eliminados B)
+    for nome in eliminados:
+        elimina(nome, "eliminado")
+
+    if usuarios:
+        broadcast(estado())
+    
+    else:
+        broadcast("Isso significa que todo mundo foi eliminado né? Que bando de incompetentes")
+    
+    print("acabou, Creuzebek :( acabou a baixaria)")
+
+###
+print("O servidor esta online B) e aguardando jogadores B(") #o adm esta olaine
+while True:
+    if usuarios and not rodada_ativa:
+        #precisa de uma pausa de tempo entre as rodadas?
+        roda_rodada()
+    try:
+        sock.settimeout(0.1)
+        data, addr = recebedor.recv()
+        if data:
+            comanda(data, addr)
+    except timeout:
+        continue
