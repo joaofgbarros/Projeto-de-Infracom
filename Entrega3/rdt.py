@@ -36,7 +36,7 @@ class rdt_sender(rdt):
             try:
                 ack, addr = self.socket.recvfrom(type(self).buffer_size)
                 # Se for o ack certo, recvd = True, e sai do loop. Se não, ignora
-                recvd = (addr == dest and ack == type(self).acks[self.nums[dest]])
+                recvd = (addr[1] == dest[1] and ack == type(self).acks[self.nums[dest]])
             except TimeoutError:
                 # Pacote perdido? Reenvia
                 self.udt_send(pkt, dest)

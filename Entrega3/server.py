@@ -117,17 +117,18 @@ class Server:
         if cmd[0] == 'login':
             nome = cmd[1]
             self.login(addr, nome)
-            return True
+            return
         
         # precisa ta logado p continuar
         if addr not in self.online:
             self.envia(addr, "[Servidor] voce precisa fazer login primeiro")
             self.envia(addr,"INPUT")
-            return True
+            return
         player = self.online[addr]
 
         if cmd[0] == 'logout':
             self.logout(player)
+            return
 
         # Precisa estar jogando pra continuar
         if not player.is_playing():
@@ -135,9 +136,8 @@ class Server:
             player.set_idle(False)
         elif cmd[0] == 'move':
             dir = cmd[1]
-            if self.move(player, dir): # Se achou o tesouro, manda break pra roda_rodada
+            if self.move(player, dir) and self.ganador == None: # Se achou o tesouro, guarda ganador
                 self.ganador = player
-                return False
         elif cmd[0] == 'hint':
             self.hint(player)
         elif cmd[0] == 'suggest':
@@ -146,7 +146,7 @@ class Server:
             self.envia(addr, "Não entendi esse comando :/")
             self.envia(addr, "INPUT")
         
-        return True
+        return
         
 
     def roda_rodada(self):
@@ -161,8 +161,7 @@ class Server:
             try:
                 data, addr = self.recebedor.recv()
                 if data:
-                    if not self.comanda(data, addr): # Processa o comando e decide se continua ou nao
-                        break
+                    self.comanda(data, addr) # Processa o comando
                     alguem = False
                     for _, player in self.online.items():
                         if player.is_playing() and player.is_idle():
@@ -200,7 +199,8 @@ class Server:
                     self.comanda(data, addr)
                 except TimeoutError: pass
                 continue
-
+            
+            time.sleep(3)
             print("\natencao Creuzebek, vai comecar a baixaria")
             # Reseta todo mundo pra começar uma nova rodada (todo mundo jogando, queiram ou não >:D)
             for addr, player in self.online.items():
@@ -237,9 +237,8 @@ class Server:
 
     def logout(self, player):
         addr = player.get_addr()
-        self.envia(addr, "[Servidor] Que pena que você está partindo B(")
-        addr = player.get_addr()
         del self.online[addr]
+        self.broadcast(f"Eita. O jogador {player.get_username()} não aguentou...")
 
     def move(self, player, dir):
         x, y = player.get_pos()
