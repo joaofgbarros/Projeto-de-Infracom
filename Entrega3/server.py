@@ -302,13 +302,13 @@ class Server:
         tx, ty = self.tesouro
 
         if ty > py:
-            self.envia(addr, "Sugestão: move up.")
+            self.envia(addr, f"Sugestão: move up {ty-py} casas.")
         elif ty < py:
-            self.envia(addr, "Sugestão: move down.")
+            self.envia(addr, f"Sugestão: move down {py-ty} casas.")
         elif tx > px:
-            self.envia(addr, "Sugestão: move right.")
+            self.envia(addr, f"Sugestão: move right {tx-px} casas.")
         else:
-            self.envia(addr, "Sugestão: move left.")
+            self.envia(addr, f"Sugestão: move left {px-tx} casas.")
 
 
 if __name__ == '__main__':
