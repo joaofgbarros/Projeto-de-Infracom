@@ -16,6 +16,7 @@ while True:
 
     # envia comando p servidor (login, hint, etc)
     enviador.send(cmd.encode(), server_addr)
+    if cmd == 'logout': break
 
     # Recebe respostas até servidor pedir input
     while True:

@@ -5,7 +5,7 @@ class rdt:
     acks = [b'ACK0', b'ACK1']
     pkts = [b'PKT0', b'PKT1']
     buffer_size = 1024
-    lost_pkt_probability = 0.04
+    lost_pkt_probability = 0
 
     def __init__(self, socket: socket):
         self.socket = socket
@@ -18,30 +18,31 @@ class rdt:
 class rdt_sender(rdt):
     def __init__(self, socket: socket):
         super().__init__(socket)
-        self.seqnum = 0 # Número de sequência
-        self.timeout = 0.1
+        self.nums = dict() # Número de sequências
 
     # Envia um pacote e recebe o ack correspondente
-    def send(self, msg, dest):
-        pkt = type(self).pkts[self.seqnum] + msg
-        self.socket.settimeout(self.timeout)
+    def send(self, msg, dest, timeout=0.1):
+        if dest not in self.nums:
+            self.nums[dest] = 0
+        
+        pkt = type(self).pkts[self.nums[dest]] + msg
+        self.socket.settimeout(timeout)
         self.udt_send(pkt, dest)
         recvd = False
         while not recvd:
             # Assume que enviou bem. Espera o ACK
             try:
-                ack = self.socket.recv(type(self).buffer_size)
+                ack, _ = self.socket.recvfrom(type(self).buffer_size)
                 # Se for o ack certo, recvd = True, e sai do loop. Se não, ignora
-                recvd = (ack == type(self).acks[self.seqnum])
+                recvd = (ack == type(self).acks[self.nums[dest]])
             except:
                 self.udt_send(pkt, dest)
-        self.seqnum = 1 - self.seqnum
+        self.nums[dest] = 1 - self.nums[dest]
 
 class rdt_receiver(rdt):
     def __init__(self, socket: socket):
         super().__init__(socket)
         self.nums = dict() # Dicionario para manter seqnum esperado de todos do clientes / do servidor
-        self.timeout = 0.5
 
     def extrai_pacote(pctdata):
         cabeca = pctdata[:4]
@@ -52,8 +53,8 @@ class rdt_receiver(rdt):
         
         return -1, b''
 
-    def recv(self):
-        self.socket.settimeout(self.timeout) 
+    def recv(self, timeout=0.1):
+        self.socket.settimeout(timeout) 
         receba = True
         while receba:
             pkts, addr = self.socket.recvfrom(type(self).buffer_size)

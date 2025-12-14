@@ -3,306 +3,315 @@ from rdt import *
 import random
 import time
 
-sock = socket(AF_INET, SOCK_DGRAM)
-sock.bind(('localhost', 12000))
-print("O servidor HuntCin está pronto para receber!")
-
-recebedor = rdt_receiver(sock)
-enviador = rdt_sender(sock)
-
-# estado atual do jogo
-
-usuarios = {}               # nome → addr ; usuarios online, pra saber a porta endereco
-enderecos = {}              # addr → nome ; contrario: pega porta e sabe usuario q mandou
-pos = {}                    # nome → (x,y) ; posicao do usuario no grid
-usou_hint = {}              # nome → ja usou sim ou nao (so pode 1)
-usou_suggest = {}           # nome → booleano tb
-tesouro = None              # (x, y) ; posicao do tesouro
-ociosos = {}                # nome -> addr ; usado para saber se o servidor está a espera de um ACK de um usuário especifico
-ranking = {}                # nome -> int ; usado para saber a pontuação do usuário
-
-# controle das rodadas
-
-rodada_ativa = False        # flag pra indicar se tem uma rodada rodando
-tempo_rodada = 10           # 10 segundos por rodada
-jogadores_jogando = set()   # jogadores que enviaram movimento nessa rodada
-
-# funcoes pro jogo
-
-def envia(addr, msg):
-    enviador.send(msg.encode(), addr)
+class Player:
+    def __init__(self, addr, username):
+        self.addr = addr
+        self.username = username
+        self.play = False
+        self.idle = False
+        self.score = 0
+        
+        self.hint = False
+        self.suggest = False
+        self.pos = (1, 1)
     
-def broadcast(msg):
-    for _, addr in usuarios.items():
-       if _ not in ociosos:
-        envia(addr, msg)    
+    def reset(self):
+        self.play = True
+        self.hint = False
+        self.suggest = False
+        self.pos = (1, 1)
     
-def sorteia_tesouro():
-    global tesouro
-    #grid 3x3
-    while True:
-        x = random.randint(1, 3)
-        y = random.randint(1, 3)
+    def ganha(self):
+        self.score += 1
+    
+    def elimina(self):
+        self.play = False
 
-        # nao pode comecar junto com os jogadores em 1,1
-        if (x, y) != (1, 1):
-            tesouro = (x, y)
-            return
+    def is_idle(self):
+        return self.idle
 
-def estado():
-    s = "[Servidor] Estado atual: " # msg q envia a cada rodada
-    partes = []
-    for nome, (x,y) in pos.items():
-        partes.append(f"{nome}({x},{y})")
-    return s + ", ".join(partes)
+    def set_idle(self, idle): 
+        self.idle = idle
+    
+    def is_playing(self): 
+        return self.play
 
-def elimina(nome, motivo): #me de motivo pra ir embora
-    if nome in usuarios and motivo == "eliminado":
-        addr = usuarios[nome]
-        envia(addr, f"Voce foi {motivo} B(") #avisando o perdedor
-        #removendo o perdedor
-        if nome in pos:
-            del pos[nome]
-        if nome in usou_hint:
-            del usou_hint[nome]
-        if nome in usou_suggest:
-            del usou_suggest[nome]
+    def get_username(self):
+        return self.username
+    
+    def get_addr(self):
+        return self.addr
 
-        #termina de humilhar completamente o cara avisando os outros
-        broadcast(f"{nome} foi {motivo} XD")
+    def get_full_username(self):
+        return f"<{self.username}:{self.addr}>"
+    
+    def get_pos(self):
+        return self.pos
+    
+    def set_pos(self, x, y):
+        self.pos = (x, y)
+
+    def get_score(self):
+        return self.score
+
+    def get_hint(self):
+        return self.hint
+    
+    def set_hint(self, hint):
+        self.hint = hint
+
+    def get_suggest(self):
+        return self.suggest
+
+    def set_suggest(self, suggest):
+        self.suggest = suggest
+
+
+class Server:
+    def __init__(self, addr):
+        self.addr = addr
+        self.sock = socket(AF_INET, SOCK_DGRAM)
+        self.sock.bind(addr)
+        
+        self.recebedor = rdt_receiver(self.sock)
+        self.enviador = rdt_sender(self.sock)
+
+        self.nomes = set()
+        self.online = {}
+        self.tesouro = (3, 3)
+        self.ganador = None
+        self.run = False
+        self.tempo_rodada = 30
+    
+    def envia(self, addr, msg):
+        self.enviador.send(msg.encode(), addr)
+    
+    def broadcast(self, msg):
+        for addr, player in self.online.items():
+            if not player.is_idle():
+                self.envia(addr, msg)
+
+    def sorteia_tesouro(self):
+        #grid 3x3
+        while True:
+            x = random.randint(1, 3)
+            y = random.randint(1, 3)
+
+            # nao pode comecar junto com os jogadores em 1,1
+            if (x, y) != (1, 1):
+                self.tesouro = (x, y)
+                print("Tesouro está em ", self.tesouro, ". Shhhh...")
+                return
+    
+    def estado(self):
+        s = "[Servidor] Estado atual: " # msg q envia a cada rodada
+        partes = []
+        for _, player in self.online.items():
+            if player.play:
+                partes.append(f"{player.get_username()}{player.get_pos()}")
+        return s + ", ".join(partes)
+
+    def comanda(self, data, addr):
+        cmd = data.decode().strip().split()
+
+        if cmd[0] == 'login':
+            nome = cmd[1]
+            self.login(addr, nome)
+            return True
+        
+        # precisa ta logado p continuar
+        if addr not in self.online:
+            self.envia(addr, "[Servidor] voce precisa fazer login primeiro")
+            self.envia(addr,"INPUT")
+            return True
+        player = self.online[addr]
+
+        if cmd[0] == 'logout':
+            self.logout(player)
+
+        # Precisa estar jogando pra continuar
+        if not player.is_playing():
+            self.envia(addr, "[Servidor] Você foi eliminado por inatividade")
+            player.set_idle(False)
+        elif cmd[0] == 'move':
+            dir = cmd[1]
+            if self.move(player, dir): # Se achou o tesouro, manda break pra roda_rodada
+                self.ganador = player
+                return False
+        elif cmd[0] == 'hint':
+            self.hint(player)
+        elif cmd[0] == 'suggest':
+            self.suggest(player)
+        else:
+            self.envia(addr, "Não entendi esse comando :/")
+            self.envia(addr, "INPUT")
+        
         return True
-    if nome in usuarios and motivo == "desconectado":
-        addr = usuarios[nome]
-        envia(addr, f"Voce foi {motivo} B(") #avisando o perdedor
-        #removendo o perdedor
-        if nome in usuarios:
-            del usuarios[nome]
-        if addr in enderecos:
-            del enderecos[addr]
-        if nome in pos:
-            del pos[nome]
-        if nome in usou_hint:
-            del usou_hint[nome]
-        if nome in usou_suggest:
-            del usou_suggest[nome]
-
-        #termina de humilhar completamente o cara avisando os outros
-        broadcast(f"{nome} foi {motivo} XD")
-        return True
-    return False
-
-def comanda(data, addr):
-    cmd = data.decode().strip().split()
-    #recebendo comandos
-
-    # login
-    if cmd[0] == "login":
-        nome = cmd[1]
-
-        if nome in usuarios:
-            envia(addr, "alguem ja usou esse nome! seja mais original") # nao pode nome repetido
-            envia(addr,"INPUT")
-            return
         
-        usuarios[nome] = addr
-        enderecos[addr] = nome
-        ranking[nome] = 0
 
-        # valores iniciais
-        pos[nome] = (1,1)
-        usou_hint[nome] = False
-        usou_suggest[nome] = False
-
-        if tesouro is None:
-            sorteia_tesouro()
-
-        envia(addr, "voce esta online!")
-        #ociosos[nome] = addr
-        return
-
-    # precisa ta logado p continuar
-    if addr not in enderecos:
-        envia(addr, "voce precisa fazer login primeiro")
-        envia(addr,"INPUT")
-        return
-
-    nome = enderecos[addr]
-
-    # logout
-    if cmd[0] == "logout": # remove o usuario
-        elimina(nome, "desconectado") #uma eliminacao voluntaria
-        envia(addr, "voce deslogou")
-        envia(addr,"INPUT")
-        return
-    
-    if rodada_ativa:
-        if cmd[0] in ["move", "hint", "suggest"]:
-            jogadores_jogando.add(nome)
-
-        # move (incrementa as coordenadas. tem que impedir de "sair" do grid)
-        if cmd[0] == "move":
-            direcao = cmd[1]
-
-            x, y = pos[nome]
-
-            if direcao == "up":
-                y += 1
-            elif direcao == "down":
-                y -= 1
-            elif direcao == "left":
-                x -= 1
-            elif direcao == "right":
-                x += 1
-            else:
-                envia("Como que tu quer jogar o jogo sem saber jogar. Joga o jogo.")
-                envia("INPUT")
-                return
-            # checa se nao vai sair
-            if not (1 <= x <= 3 and 1 <= y <= 3):
-                envia(addr, "cuidado, voce vai sair do mapa!")
-                envia(addr,"INPUT")
-                #ociosos[nome] = addr
-                return
-            pos[nome] = (x,y)
-            del ociosos[nome]
-
-            # se achou o tesouro, avisa todos: “ O jogador <nome:porta> encontrou o tesouro na posição (x,y)!”
-            if (x,y) == tesouro:
-                broadcast(f"O jogador {nome} encontrou o tesouro na posição {tesouro}!")
-                ranking[nome] = ranking[nome] + 1
-                for nome, (x,y) in pos.items():
-                    pos[nome] = (1,1)
-                usou_hint.clear()
-                usou_suggest.clear()
-                return "achooou" #força o fim da rodada
-            
-            return
-
-
-        # para os recursos especiais, ja que a funcao dos dois eh a mesma de informar uma direcao do tesouro,
-        # ambos comparam as coordenadas do usuario aas do tesouro, mas possuem prioridade diferente sobre qual direcao dizer
-        # por exemplo, se o jogador esta em (1,1) e o tesouro em(2,2), a hint vera logo que X(tesouro) > X(user) e 
-        # dira pro jogador ir para direita. ja o suggest vera primeiro que Y(tesouro) > Y(user), e sugere  UP.
-        # dessa forma, os dois recursos so devolvem a mesma direcao se ela for a unica que precisa ser tomada (reto) ate o tesouro.
+    def roda_rodada(self):
+        self.broadcast(f"[Servidor] Rodada iniciada! Jogadores têm {self.tempo_rodada} segundos para enviar os seus movimentos.") #em um tom claro de ameaça
+        for addr, player in self.online.items():
+            if player.is_playing() and not player.is_idle():
+                self.envia(addr, "INPUT")
+                player.set_idle(True)
         
-        # hint dica, printa ex: “O tesouro está mais acima.”
+        inicio = time.time()
+        while time.time() - inicio < self.tempo_rodada: #timeout de 10s pra receber os comandos
+            try:
+                data, addr = self.recebedor.recv()
+                if data:
+                    if not self.comanda(data, addr): # Processa o comando e decide se continua ou nao
+                        break
+                    alguem = False
+                    for _, player in self.online.items():
+                        if player.is_playing() and player.is_idle():
+                            alguem = True
+                    if not alguem: break
+            except timeout:
+                pass
 
-        if cmd[0] == "hint":
-            if usou_hint[nome]:
-                envia(addr, "voce ja usou hint!")
-                envia(addr,"INPUT")
-                #ociosos[nome] = addr
-                return
-
-            usou_hint[nome] = True #hint usada
-            px, py = pos[nome]
-            tx, ty = tesouro
-
-            if (ty-py) > 0 and abs((ty-py)) >= abs((tx-px)):
-                envia(addr, "O tesouro está mais acima")
-                #ociosos[nome] = addr
-            elif (tx-px) > 0 and abs((tx-px)) >= abs((ty-py)):
-                envia(addr, "O tesouro está mais a direita")
-                #ociosos[nome] = addr
-            elif (tx-px) < 0 and abs((tx-px)) >= abs((ty-py)):
-                envia(addr, "O tesouro está mais a esquerda")
-                #ociosos[nome] = addr
-            else:
-                envia(addr, "O tesouro está mais abaixo")
-                #ociosos[nome] = addr
-            del ociosos[nome]
-            return
+        # elimina
+        for _, player in self.online.items():
+            if player.is_playing() and player.is_idle():
+                player.elimina()
         
-        # sugestao, printa ex: “Sugestão: move up.”
-        if cmd[0] == "suggest":
-            if usou_suggest[nome]:
-                envia(addr, "voce ja usou suggest!")
-                envia(addr,"INPUT")
-                #ociosos[nome] = addr
-                return
+        # Envia estado
+        self.broadcast(self.estado())
 
-            usou_suggest[nome] = True #agora ja usou
+        # Checa se acabou (alguem chegou no tesouro, ou nao tem mais ninguem)
+        alguem = False
+        for _, player in self.online.items():
+            if player.is_playing():
+                alguem = True
+        
+        if not alguem or self.ganador != None:
+            self.run = False
+        if self.ganador != None:
+            self.broadcast(f"[Servidor] O jogador {self.ganador.get_full_username()} encontrou o tesouro na posição {self.tesouro}!")
+            self.ganador.ganha()
 
-            px, py = pos[nome]
-            tx, ty = tesouro
+    def main(self):
+        print("O servidor esta online B) e aguardando jogadores B(") #o adm esta olaine
+        while True:
+            if not self.online:
+                try:
+                    data, addr = self.recebedor.recv()
+                    self.comanda(data, addr)
+                except TimeoutError: pass
+                continue
 
-            if ty > py:
-                envia(addr, "Sugestão: move up.")
-                #ociosos[nome] = addr
-            elif ty < py:
-                envia(addr, "Sugestão: move down.")
-                #ociosos[nome] = addr
-            elif tx > px:
-                envia(addr, "Sugestão: move right.")
-                #ociosos[nome] = addr
+            print("\natencao Creuzebek, vai comecar a baixaria")
+            # Reseta todo mundo pra começar uma nova rodada (todo mundo jogando, queiram ou não >:D)
+            for addr, player in self.online.items():
+                if not player.is_idle():
+                    player.reset()
+            self.sorteia_tesouro()
+            self.ganador = None
+            self.run = True
+            while self.run:
+                self.roda_rodada()
+
+            self.broadcast("Ranking atual: ")
+            for addr, player in self.online.items():
+                self.broadcast(f"  O jogador {player.get_username()} está com {player.get_score()}.")
+
+            print("acabou, Creuzebek :( acabou a baixaria)")
+
+    def login(self, addr, username):
+        # Checa se ja existe alguem nesse endereço / com esse nome
+        if addr in self.online:
+            self.envia(addr, "[Servidor] Você já está online!")
+            self.envia(addr, "INPUT")
+        else:
+            tem = False
+            for _, player in self.online.items():
+                if player.get_username() == username:
+                    tem = True
+            if tem:
+                self.envia(addr, "[Servidor] Já tem alguém com esse nome! >:C")
+                self.envia(addr, "INPUT")
             else:
-                envia(addr, "Sugestão: move left.")
-                #ociosos[nome] = addr
-            del ociosos[nome]
+                self.envia(addr, "[Servidor] Você está online :-)")
+                self.online[addr] = Player(addr, username)
+
+    def logout(self, player):
+        addr = player.get_addr()
+        self.envia(addr, "[Servidor] Que pena que você está partindo B(")
+        addr = player.get_addr()
+        del self.online[addr]
+
+    def move(self, player, dir):
+        x, y = player.get_pos()
+        addr = player.get_addr()
+
+        if dir == "up":
+            y += 1
+        elif dir == "down":
+            y -= 1
+        elif dir == "left":
+            x -= 1
+        elif dir == "right":
+            x += 1
+        else:
+            self.envia(addr, "[Servidor] Como que tu quer jogar o jogo sem saber jogar. Joga o jogo.")
+            self.envia(addr, "INPUT")
+            return False
+        # checa se nao vai sair
+        if not (1 <= x <= 3 and 1 <= y <= 3):
+            self.envia(addr, "[Servidor] cuidado, voce vai sair do mapa!")
+            self.envia(addr,"INPUT")
+            return False
+        player.set_pos(x,y)
+        player.set_idle(False)
+
+        # se achou o tesouro, avisa todos: “ O jogador <nome:porta> encontrou o tesouro na posição (x,y)!”
+        return (x, y) == self.tesouro
+
+    def hint(self, player):
+        addr = player.get_addr()
+        if player.get_hint():
+            self.envia(addr, "[Servidor] voce ja usou hint!")
+            self.envia(addr,"INPUT")
             return
-    #nao ta tendo rodada e o cara ta querendo jogar, ô bixin ansioso
-    envia(addr, "Espera comecar a rodada primeiro, danado")
-    
-def roda_rodada():
-    global rodada_ativa, tesouro
 
-    print("\natencao Creuzebek, vai comecar a baixaria")
-    rodada_ativa = True
-    jogadores_jogando.clear()
+        player.set_hint(True)
+        player.set_idle(False)
+        px, py = player.get_pos()
+        tx, ty = self.tesouro
 
-    if tesouro is None:
-        sorteia_tesouro()
+        if (ty-py) > 0 and abs((ty-py)) >= abs((tx-px)):
+            self.envia(addr, "Dica: O tesouro está mais acima")
+        elif (tx-px) > 0 and abs((tx-px)) >= abs((ty-py)):
+            self.envia(addr, "Dica: O tesouro está mais a direita")
+        elif (tx-px) < 0 and abs((tx-px)) >= abs((ty-py)):
+            self.envia(addr, "Dica: O tesouro está mais a esquerda")
+        else:
+            self.envia(addr, "Dica: O tesouro está mais abaixo")
 
-    broadcast(f"Rodada iniciada! Voce tem {tempo_rodada} segundos para enviar seu movimento.") #em um tom claro de ameaça
-    broadcast("INPUT") #sinal pros clientes enviarem os seus comandos
-    for nome, addr in usuarios.items():
-        ociosos[nome] = addr
-    inicio = time.time()
-    achou = False
+    def suggest(self, player):
+        addr = player.get_addr()
+        if player.get_suggest():
+            self.envia(addr, "[Servidor] voce ja usou suggest!")
+            self.envia(addr,"INPUT")
+            return
 
-    while time.time() - inicio < tempo_rodada and not achou and ociosos: #timeout de 10s pra receber os comandos
-        try:
-            data, addr = recebedor.recv()
-            sock.settimeout(0.1)
-            if data:
-                resultado = comanda(data, addr)
-                if resultado == "achooou":
-                    achou = True
-        except timeout:
-            pass
-    #acabou a rodada
-    rodada_ativa = False
+        player.set_suggest(True)
+        player.set_idle(False)
+        px, py = player.get_pos()
+        tx, ty = self.tesouro
 
-    eliminados = []
-    for nome in list(usuarios.keys()):
-        if nome not in jogadores_jogando:
-            eliminados.append(nome)
-    
-    #eliminando os eliminados B)
-    for nome in eliminados:
-        elimina(nome, "eliminado")
+        if ty > py:
+            self.envia(addr, "Sugestão: move up.")
+        elif ty < py:
+            self.envia(addr, "Sugestão: move down.")
+        elif tx > px:
+            self.envia(addr, "Sugestão: move right.")
+        else:
+            self.envia(addr, "Sugestão: move left.")
 
-    if usuarios:
-        broadcast(estado())
-        broadcast("Ranking atual: ")
-        for nome, addr in usuarios.items():
-         broadcast(f"O jogador {nome} está com {ranking[nome]}.")
-    
-    else:
-        broadcast("Isso significa que todo mundo foi eliminado né? Que bando de incompetentes")
-    
-    print("acabou, Creuzebek :( acabou a baixaria)")
 
-###
-print("O servidor esta online B) e aguardando jogadores B(") #o adm esta olaine
-while True:
-    if usuarios and not rodada_ativa:
-        #precisa de uma pausa de tempo entre as rodadas?
-        roda_rodada()
-    try:
-        sock.settimeout(0.1)
-        data, addr = recebedor.recv()
-        if data:
-            comanda(data, addr)
-    except timeout:
-        continue
+if __name__ == '__main__':
+    server_addr = ('localhost', 12000)
+    serv = Server(server_addr)
+    serv.main()
