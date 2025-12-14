@@ -1,7 +1,6 @@
 from socket import *
 from rdt import *
 import random
-import threading
 import time
 
 sock = socket(AF_INET, SOCK_DGRAM)
@@ -20,6 +19,7 @@ usou_hint = {}              # nome → ja usou sim ou nao (so pode 1)
 usou_suggest = {}           # nome → booleano tb
 tesouro = None              # (x, y) ; posicao do tesouro
 ociosos = {}                # nome -> addr ; usado para saber se o servidor está a espera de um ACK de um usuário especifico
+ranking = {}                # nome -> int ; usado para saber a pontuação do usuário
 
 # controle das rodadas
 
@@ -34,6 +34,7 @@ def envia(addr, msg):
     
 def broadcast(msg):
     for _, addr in usuarios.items():
+       if _ not in ociosos:
         envia(addr, msg)    
     
 def sorteia_tesouro():
@@ -56,7 +57,21 @@ def estado():
     return s + ", ".join(partes)
 
 def elimina(nome, motivo): #me de motivo pra ir embora
-    if nome in usuarios:
+    if nome in usuarios and motivo == "eliminado":
+        addr = usuarios[nome]
+        envia(addr, f"Voce foi {motivo} B(") #avisando o perdedor
+        #removendo o perdedor
+        if nome in pos:
+            del pos[nome]
+        if nome in usou_hint:
+            del usou_hint[nome]
+        if nome in usou_suggest:
+            del usou_suggest[nome]
+
+        #termina de humilhar completamente o cara avisando os outros
+        broadcast(f"{nome} foi {motivo} XD")
+        return True
+    if nome in usuarios and motivo == "desconectado":
         addr = usuarios[nome]
         envia(addr, f"Voce foi {motivo} B(") #avisando o perdedor
         #removendo o perdedor
@@ -86,10 +101,12 @@ def comanda(data, addr):
 
         if nome in usuarios:
             envia(addr, "alguem ja usou esse nome! seja mais original") # nao pode nome repetido
+            envia(addr,"INPUT")
             return
         
         usuarios[nome] = addr
         enderecos[addr] = nome
+        ranking[nome] = 0
 
         # valores iniciais
         pos[nome] = (1,1)
@@ -106,6 +123,7 @@ def comanda(data, addr):
     # precisa ta logado p continuar
     if addr not in enderecos:
         envia(addr, "voce precisa fazer login primeiro")
+        envia(addr,"INPUT")
         return
 
     nome = enderecos[addr]
@@ -114,13 +132,14 @@ def comanda(data, addr):
     if cmd[0] == "logout": # remove o usuario
         elimina(nome, "desconectado") #uma eliminacao voluntaria
         envia(addr, "voce deslogou")
+        envia(addr,"INPUT")
         return
     
     if rodada_ativa:
         if cmd[0] in ["move", "hint", "suggest"]:
             jogadores_jogando.add(nome)
 
-        # move (incrementa as coordenadas. tem que impedir de "sair" do grid  
+        # move (incrementa as coordenadas. tem que impedir de "sair" do grid)
         if cmd[0] == "move":
             direcao = cmd[1]
 
@@ -134,25 +153,27 @@ def comanda(data, addr):
                 x -= 1
             elif direcao == "right":
                 x += 1
-
+            else:
+                envia("Como que tu quer jogar o jogo sem saber jogar. Joga o jogo.")
+                envia("INPUT")
+                return
             # checa se nao vai sair
             if not (1 <= x <= 3 and 1 <= y <= 3):
                 envia(addr, "cuidado, voce vai sair do mapa!")
+                envia(addr,"INPUT")
                 #ociosos[nome] = addr
                 return
-
             pos[nome] = (x,y)
+            del ociosos[nome]
 
             # se achou o tesouro, avisa todos: “ O jogador <nome:porta> encontrou o tesouro na posição (x,y)!”
             if (x,y) == tesouro:
                 broadcast(f"O jogador {nome} encontrou o tesouro na posição {tesouro}!")
+                ranking[nome] = ranking[nome] + 1
                 for nome, (x,y) in pos.items():
                     pos[nome] = (1,1)
-                for nome, _ in usou_hint:
-                    del usou_hint[nome]
-                for nome, _ in usou_suggest:
-                    del usou_suggest[nome]
-                sorteia_tesouro()
+                usou_hint.clear()
+                usou_suggest.clear()
                 return "achooou" #força o fim da rodada
             
             return
@@ -169,6 +190,7 @@ def comanda(data, addr):
         if cmd[0] == "hint":
             if usou_hint[nome]:
                 envia(addr, "voce ja usou hint!")
+                envia(addr,"INPUT")
                 #ociosos[nome] = addr
                 return
 
@@ -188,12 +210,14 @@ def comanda(data, addr):
             else:
                 envia(addr, "O tesouro está mais abaixo")
                 #ociosos[nome] = addr
+            del ociosos[nome]
             return
         
         # sugestao, printa ex: “Sugestão: move up.”
         if cmd[0] == "suggest":
             if usou_suggest[nome]:
                 envia(addr, "voce ja usou suggest!")
+                envia(addr,"INPUT")
                 #ociosos[nome] = addr
                 return
 
@@ -214,6 +238,7 @@ def comanda(data, addr):
             else:
                 envia(addr, "Sugestão: move left.")
                 #ociosos[nome] = addr
+            del ociosos[nome]
             return
     #nao ta tendo rodada e o cara ta querendo jogar, ô bixin ansioso
     envia(addr, "Espera comecar a rodada primeiro, danado")
@@ -229,27 +254,24 @@ def roda_rodada():
         sorteia_tesouro()
 
     broadcast(f"Rodada iniciada! Voce tem {tempo_rodada} segundos para enviar seu movimento.") #em um tom claro de ameaça
-    broadcast("input") #sinal pros clientes enviarem os seus comandos
-
+    broadcast("INPUT") #sinal pros clientes enviarem os seus comandos
+    for nome, addr in usuarios.items():
+        ociosos[nome] = addr
     inicio = time.time()
     achou = False
 
-    while time.time() - inicio < tempo_rodada and not achou: #timeout de 10s pra receber os comandos
+    while time.time() - inicio < tempo_rodada and not achou and ociosos: #timeout de 10s pra receber os comandos
         try:
-            data, addr = recebedor.recv(0.1)
+            data, addr = recebedor.recv()
+            sock.settimeout(0.1)
             if data:
                 resultado = comanda(data, addr)
                 if resultado == "achooou":
                     achou = True
-                    break
         except timeout:
             pass
     #acabou a rodada
     rodada_ativa = False
-
-    if achou:
-        broadcast("OBA!!! Encontraram o tesouro!")
-        return
 
     eliminados = []
     for nome in list(usuarios.keys()):
@@ -262,6 +284,9 @@ def roda_rodada():
 
     if usuarios:
         broadcast(estado())
+        broadcast("Ranking atual: ")
+        for nome, addr in usuarios.items():
+         broadcast(f"O jogador {nome} está com {ranking[nome]}.")
     
     else:
         broadcast("Isso significa que todo mundo foi eliminado né? Que bando de incompetentes")
